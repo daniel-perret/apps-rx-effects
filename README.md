@@ -1,2 +1,2 @@
-# tnc-air-quality
-data and code resources for projects related to fire impacts on air quality and human health
+# apps-rx-effects
+Code and data associated with prescribed fire effects modeling on the George Washington and Jefferson National Forests.
