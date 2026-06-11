@@ -1,18 +1,14 @@
 #### libraries and setup code
 
 library(tidyverse)
-library(rFIA)
 library(ggplot2)
 library(terra)
 library(sf)
 library(ggmap)
-#library(rgdal)
-library(lme4)
-library(performance)
-library(ggeffects)
-library(plotrix)
 library(tidyterra)
 library(RSQLite)
+library(lubridate)
+library(ClimInd)
 
 select <- dplyr::select
 

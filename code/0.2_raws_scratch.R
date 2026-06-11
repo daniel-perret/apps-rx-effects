@@ -28,15 +28,10 @@ unit.hist <- unit.hist %>%
                      RAWS_elev = Elevation),
             by = c("RAWS_station" = "Name"))
 
-rawslist <- list.files("data/RAWS",full.names = T) %>% 
-  str_subset(".csv", negate=T)
+rawslist <- list.files("data/RAWS",pattern = ".xlsx", full.names = T)
 
-all.raws <- data.frame()
-for(st in rawslist){
-  x <- RAWSmet::cefa_parseData(fileString = st)
-  all.raws <- all.raws %>% 
-    bind_rows(x)
-}
+all.raws <- map_df(rawslist, function(x){readxl::read_excel(x)})
+
 
 ## ---- generating dataframe of all station/fire combos with all observations for week prior to fire
 clean.raws <- all.raws %>% 
