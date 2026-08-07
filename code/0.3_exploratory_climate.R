@@ -6,7 +6,8 @@
 
 # load Rx outcome polygons
 
-rx.shp <- sf::read_sf("data/from_jean/GWJEFF post-burn forest structure/1burn_cnpy.shp")
+# rx.shp <- sf::read_sf("data/from_jean/GWJEFF post-burn forest structure/1burn_cnpy.shp")
+rx.shp <- sf::read_sf("data/from_jean/Rxb history and 1burn names fix/1burn_cnpy.shp")
 names(rx.shp)
 rx.shp$burn_name %>% unique()
 
