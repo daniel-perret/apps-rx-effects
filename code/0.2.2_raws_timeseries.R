@@ -2,14 +2,14 @@
 
 # load RAWS data
 
-all.raws <- read.csv("data/RAWS/RAWS_all_stations.csv")
+all.raws <- read.csv("data/RAWS/RAWS_all_stations_092126.csv") %>% 
+  mutate(station = ifelse(station == "Wise", "Flatwoods", station))
 names(all.raws)
 
 # load fire data
 
-#unit.hist <- read.csv("data/rx_unit_history.csv", header=T, stringsAsFactors = F)
-#unit.hist <- read.csv("data/rx_unit_hist_PAreconciled.csv", header=T, stringsAsFactors = F)
-unit.hist <- read.csv("data/Rxb_unit_history_080726.csv", header=T, stringsAsFactors = F)
+
+unit.hist <- read.csv("data/Rxb_unit_history_092126.csv", header=T, stringsAsFactors = F)
 
 unit.hist <- unit.hist %>% 
   mutate(keep. = trimws(keep.),
@@ -89,6 +89,7 @@ raws.burn.ts <- raws.daily %>%
               select(Fire_name,
                      Fire_key, 
                      burn.date = date.clean,
+                     date_confirm,
                      burn_entry,
                      RAWS_station),
             relationship = "many-to-many",
@@ -97,7 +98,7 @@ raws.burn.ts <- raws.daily %>%
          date > burn.date - 7,
          date <= burn.date) %>% 
   # summarizing to daily values
-  group_by(Fire_key, date) %>% 
+  group_by(Fire_key, date, date_confirm) %>% 
   summarise(station = first(station),
             daily_mean_temp = mean(temp_air_avg, na.rm=T),
             daily_max_temp = max(temp_air_avg, na.rm=T),
@@ -134,9 +135,9 @@ raws.burn.ts <- raws.burn.ts %>%
                    "date"))
 # write and load
 
-write.csv(raws.burn.ts, "data/raws_burn_ts_080726.csv", row.names = F)
+write.csv(raws.burn.ts, "data/fire_weather_summaries/raws_burn_ts_092126.csv", row.names = F)
 
-raws.burn.ts <- read.csv("data/raws_burn_ts_080726.csv", header = T, stringsAsFactors = F)
+raws.burn.ts <- read.csv("data/fire_weather_summaries/raws_burn_ts_092126.csv", header = T, stringsAsFactors = F)
 
 
 # calculate trends
@@ -171,6 +172,7 @@ raws.burn.trends <- raws.burn.ts %>%
            ~trend_class(.x, date),
            .names = "{sub('^X', '', .col)}_trend"),
     burn.date = first(burn.date),
+    date_confirm = first(date_confirm),
     fire_name = first(fire_name),
     burn_entry = first(burn_entry))
 
@@ -182,5 +184,5 @@ final.weather <- raws.burn.ts %>%
   left_join(raws.burn.trends)
 
 write.csv(final.weather,
-          "data/fireweather_summary_Rx1b.csv",
+          "data/fire_weather_summaries/fireweather_summary_Rx1b_092126.csv",
           row.names = F)

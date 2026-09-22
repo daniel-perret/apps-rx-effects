@@ -1,5 +1,5 @@
 #### Standardize WRCC RAWS xlsx files into a single combined CSV
-#### Reads 10 station files from data/RAWS/, handles two column schemas,
+#### Reads 11 station files from data/RAWS/, handles three column schemas,
 #### and writes data/RAWS/RAWS_all_stations.csv
 
 source("code/00_setup.R")
@@ -8,9 +8,43 @@ source("code/00_setup.R")
 
 read_raws_file <- function(path) {
   # Extract station name from row 1
-  station_name <- readxl::read_excel(path, n_max = 1, col_names = FALSE)[[1, 1]] %>%
+  head_rows <- readxl::read_excel(path, n_max = 4, col_names = FALSE,
+                                  col_types = "text")
+
+  station_name <- head_rows[[1, 1]] %>%
     sub("\\s+Virginia.*", "", x = .) %>%
     trimws()
+
+  # Legacy schema (Wise): 4 header rows, single combined YYMMDDhhmm
+  # datetime column, no separate date/time columns
+  is_legacy <- grepl("YYMMDDhhmm", head_rows[[4, 1]] %||% "", fixed = TRUE)
+
+  if (is_legacy) {
+    df <- readxl::read_excel(path, skip = 4, col_names = FALSE,
+                             col_types = "text")
+    colnames(df) <- c("datetime_raw", "precip", "wind_speed", "wind_dir",
+                      "temp_air_avg", "temp_fuel", "rh", "fuel_moisture",
+                      "temp_air_max", "temp_air_min", "rh_max", "rh_min")
+    df <- df %>%
+      transmute(
+        datetime      = as.POSIXct(datetime_raw, format = "%y%m%d%H%M", tz = "UTC"),
+        precip, wind_speed, wind_dir, temp_air_avg, temp_fuel, rh,
+        fuel_moisture, temp_air_max, temp_air_min, rh_max, rh_min
+      ) %>%
+      mutate(date = as.Date(datetime),
+             time = format(datetime, "%H:%M")) %>%
+      select(-datetime)
+
+    return(
+      df %>%
+        mutate(
+          station = as.character(station_name),
+          across(-c(date, time, station), as.numeric),
+          time = as.character(time),
+          .before = 1
+        )
+    )
+  }
 
   df <- readxl::read_excel(path, skip = 3)
 
@@ -68,7 +102,7 @@ all_raws_clean <- purrr::map(files, function(f) {
 
 # ---- write output ----
 
-readr::write_csv(all_raws_clean, "data/RAWS/RAWS_all_stations.csv")
+readr::write_csv(all_raws_clean, "data/RAWS/RAWS_all_stations_092126.csv")
 message("Done. Wrote ", nrow(all_raws_clean), " rows across ",
         n_distinct(all_raws_clean$station), " stations.")
 
