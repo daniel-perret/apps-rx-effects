@@ -23,7 +23,7 @@ library(leaflet)
 
 # ---- 0. Paths ----------------------------------------------------------------
 
-pred_dir   <- "output/prelim_model/unit_predictions"
+pred_dir   <- "output/prelim_v2/unit_predictions"
 mosaic_dir <- file.path(pred_dir, "mosaics")
 shp_path   <- "data/from_jean/080726_update/Rxb units and canopy layers/rxbmodel/1burn_cnpy.shp"
 
@@ -219,6 +219,6 @@ leaflet_map
 
 # ---- 7. Save widget ----------------------------------------------------------
 
-out_html <- "output/prelim_model/leaflet/apps_rx_preds_PRELIM.html"
+out_html <- "output/prelim_v2/leaflet/apps_rx_preds_PRELIM.html"
 htmlwidgets::saveWidget(leaflet_map, file = normalizePath(out_html, mustWork = FALSE))
 message("Map saved to: ", out_html)

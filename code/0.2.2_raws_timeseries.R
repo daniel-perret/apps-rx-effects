@@ -16,16 +16,16 @@ unit.hist <- unit.hist %>%
          burn_entry = trimws(burn_entry)) %>% 
   # only retain rows the source data marks as usable
   filter(keep. == "yes",
-         # multiday entries only have a real date for the first burn_entry;
-         # later entries currently carry a placeholder date_fixed
-         burn_entry == "1") %>% 
+         # entries 1-4 have canopy outcome polygons (see 0.1_burn_polygon_prep.R)
+         burn_entry %in% as.character(1:4)) %>% 
   mutate(date.clean = as.Date(date_fixed,
                               format = "%m/%d/%Y"),
          year = year(date.clean),
          month = month(date.clean),
          day = day(date.clean),
          RAWS_station = toupper(RAWS_station),
-         Fire_name = Fire_name_fixed) %>% 
+         Fire_name = str_squish(Fire_name_fixed),
+         burn_entry = as.integer(burn_entry)) %>% 
   filter(!is.na(date.clean),
          year>=RAWS1styr)
 
@@ -135,9 +135,9 @@ raws.burn.ts <- raws.burn.ts %>%
                    "date"))
 # write and load
 
-write.csv(raws.burn.ts, "data/fire_weather_summaries/raws_burn_ts_092126.csv", row.names = F)
+write.csv(raws.burn.ts, "data/fire_weather_summaries/raws_burn_ts_allentries_110226.csv", row.names = F)
 
-raws.burn.ts <- read.csv("data/fire_weather_summaries/raws_burn_ts_092126.csv", header = T, stringsAsFactors = F)
+raws.burn.ts <- read.csv("data/fire_weather_summaries/raws_burn_ts_allentries_110226.csv", header = T, stringsAsFactors = F)
 
 
 # calculate trends
@@ -184,5 +184,5 @@ final.weather <- raws.burn.ts %>%
   left_join(raws.burn.trends)
 
 write.csv(final.weather,
-          "data/fire_weather_summaries/fireweather_summary_Rx1b_092126.csv",
+          "data/fire_weather_summaries/fireweather_summary_RxAllEntries_110226.csv",
           row.names = F)

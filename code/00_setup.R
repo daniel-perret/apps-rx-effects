@@ -22,3 +22,6 @@ theme_update(text = element_text(size=16, color = "black"),
 
 options(scipen = 9999)
 #gcinfo(TRUE)
+
+terraOptions(memfrac = 0.85,
+             memmax = 42)

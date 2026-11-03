@@ -4,13 +4,23 @@
 #### canopy severity predictions across all confirmed burn units.
 ####
 #### Predictions are restricted to burns represented in rf_data (the exact
-#### training set), so unit-level constants — fire weather, burn_doy, ACRES —
-#### are pulled directly from rf_data rather than re-joined from source files.
+#### training set), so unit-level constants — fire weather, burn_doy, ACRES,
+#### tpi_sd, area_ha, perimeter_m — are pulled directly from rf_data rather
+#### than re-joined from source files.
 ####
 #### Pixel-varying predictors  : terrain (chili, tpi, slp.dg, elev),
 ####                             winter NDVI (year-before-burn),
-####                             canopy cover (year-before-burn)
-#### Unit-level constants       : all other model predictors (from rf_data)
+####                             canopy cover (year-before-burn),
+####                             ecozone, insect_disease_5yr
+#### Unit-level constants       : all other model predictors (from rf_data),
+####                             including tpi_sd, area_ha, perimeter_m,
+####                             which are geometry-derived and genuinely
+####                             constant within a dissolved burn unit
+####
+#### ecozone and insect_disease_5yr are extracted per sample *point* (not
+#### dissolved per unit) in 0.4_exploratory_model.R, so -- like terrain/
+#### ndvi/cc -- they can vary spatially within a burn unit and must be
+#### resolved per pixel here rather than pulled as a single unit constant.
 ####
 #### Outputs
 ####   output/prelim_model/unit_predictions/<burn>_pred.tif   — 4-layer raster per unit
@@ -23,8 +33,8 @@ library(terra)
 library(randomForest)
 
 # ---- 0. Prerequisites --------------------------------------------------------
-# rf1, rf_data, terrain_stack, eric_stack, cc_stack must be present.
-# Run 0.4_exploratory_model.R if needed, or load a saved model:
+# rf1, rf_data, terrain_stack, eric_stack, cc_stack, ecozones, insdis_stack
+# must be present. Run 0.4_exploratory_model.R if needed, or load a saved model:
 #   rf1    <- readRDS("outputs/rf1.rds")
 #   rf_data <- readRDS("outputs/rf_data.rds")
 
@@ -33,16 +43,48 @@ stopifnot(
   "rf_data not found — run 0.4_exploratory_model.R first" = exists("rf_data"),
   "terrain_stack not found" = exists("terrain_stack"),
   "eric_stack not found"    = exists("eric_stack"),
-  "cc_stack not found"      = exists("cc_stack")
+  "cc_stack not found"      = exists("cc_stack"),
+  "ecozones not found"      = exists("ecozones"),
+  "insdis_stack not found"  = exists("insdis_stack")
 )
 
 # Predictors the model was actually trained on
 model_preds <- rownames(rf1$importance)
 
-# Raster-level (pixel-varying) predictors; everything else is unit-level
+# Raster-level (pixel-varying) predictors; everything else is unit-level.
+# tpi_sd/area_ha/perimeter_m are NOT raster predictors even though they're
+# new -- they're geometry summaries of the whole dissolved unit, so they're
+# already correctly picked up as unit-level constants via unit_preds below.
 raster_preds <- c("chili", "tpi", "slp.dg", "elev",
-                  "ndvi_winter_prior_year", "canopy_cover_prior_year")
+                  "ndvi_winter_prior_year", "canopy_cover_prior_year",
+                  "ecozone", "insect_disease_5yr")
 unit_preds   <- setdiff(model_preds, raster_preds)
+
+# ecozones is now aligned to the terrain grid in 0.4_exploratory_model.R
+# (nearest-neighbor, since it's categorical), so no re-alignment needed here.
+
+# Factor levels exactly as rf1 saw them at fit time, so pixel-level ecozone
+# codes map to the same integer codes internally. Any ecozone code present
+# in the raster but never seen in training (balanced_sample) becomes NA
+# here and will propagate to an NA prediction for that pixel.
+ecozone_levels <- rf1$forest$xlevels$ecozone
+
+# ndvi_winter_prior_year is a categorical NDVI bin code (NDVI_bins_mosaic.tif),
+# fit as a factor in 0.4 for the same reason as ecozone -- same level-matching
+# treatment needed here.
+ndvi_levels <- rf1$forest$xlevels$ndvi_winter_prior_year
+
+# Recode a pixel-level categorical column to the factor levels rf1 actually
+# saw at fit time, warning about (and NA-ing out) any code rf1 never saw.
+recode_to_training_levels <- function(x, levels, label, burn) {
+  recoded <- factor(as.character(x), levels = levels)
+  n_new <- sum(is.na(recoded) & !is.na(x))
+  if (n_new > 0) {
+    warning(n_new, " pixel(s) in ", burn, " have a ", label,
+            " code not seen in training -- set to NA")
+  }
+  recoded
+}
 
 # ---- 1. Burns in training data only ------------------------------------------
 
@@ -82,12 +124,18 @@ burn_bounds <- burn_bounds %>%
 ndvi_layer_names <- grep("^y_[0-9]{4}$",             names(eric_stack), value = TRUE)
 cc_layer_names   <- grep("^[0-9]{4}_TRE_[0-9]{4}$", names(cc_stack),   value = TRUE)
 
+# insect/disease layers available, for picking out each burn's 5-year
+# pre-burn window (burn_year - 5 .. burn_year - 1), mirroring the point-level
+# window logic in 0.4_exploratory_model.R
+insdis_layer_names <- grep("^insdis_[0-9]{4}$", names(insdis_stack), value = TRUE)
+insdis_layer_years <- as.integer(gsub("^insdis_", "", insdis_layer_names))
+
 # ---- 4. Predict for each burn unit ------------------------------------------
 
 pred_list    <- list()
 unit_summary <- list()
 
-dir.create("output/prelim_model/unit_predictions", showWarnings = FALSE, recursive = TRUE)
+dir.create("output/prelim_v2/unit_predictions", showWarnings = FALSE, recursive = TRUE)
 
 for (burn in confirmed_burns) {
 
@@ -103,9 +151,11 @@ for (burn in confirmed_burns) {
   topo_crop <- crop(terrain_stack, vect(unit_poly)) %>% mask(vect(unit_poly))
 
   if (ndvi_col %in% ndvi_layer_names) {
+    # categorical NDVI bin codes -- nearest-neighbor, not bilinear, so bin
+    # codes aren't interpolated into meaningless fractional values
     ndvi_crop <- crop(eric_stack[[ndvi_col]], vect(unit_poly)) %>%
       mask(vect(unit_poly)) %>%
-      resample(topo_crop, method = "bilinear")
+      resample(topo_crop, method = "near")
   } else {
     ndvi_crop <- topo_crop[[1]]; values(ndvi_crop) <- NA_real_
     warning("NDVI layer ", ndvi_col, " not found for burn: ", burn)
@@ -122,13 +172,48 @@ for (burn in confirmed_burns) {
   }
   names(cc_crop) <- "canopy_cover_prior_year"
 
+  # Ecozone (categorical; nearest-neighbor resample, consistent with the
+  # alignment to the terrain grid done in 0.4)
+  ecozone_crop <- crop(ecozones, vect(unit_poly)) %>%
+    mask(vect(unit_poly)) %>%
+    resample(topo_crop, method = "near")
+  names(ecozone_crop) <- "ecozone"
+
+  # Insect/disease disturbance, 5 yrs prior to burn. Binary 0/1 layers, so
+  # "any year in the window shows disturbance" (the point-level rule in
+  # 0.4) reduces to a cellwise max across whichever window years are
+  # available in insdis_stack.
+  insdis_window_years <- (burn_year - 5):(burn_year - 1)
+  insdis_cols_in_window <- which(insdis_layer_years %in% insdis_window_years)
+
+  if (length(insdis_cols_in_window) > 0) {
+    insdis_window_stack <- crop(insdis_stack[[insdis_layer_names[insdis_cols_in_window]]],
+                                 vect(unit_poly)) %>%
+      mask(vect(unit_poly))
+    insdis_crop <- if (nlyr(insdis_window_stack) > 1) {
+      app(insdis_window_stack, fun = function(x) {
+        if (all(is.na(x))) NA_real_ else max(x, na.rm = TRUE)
+      })
+    } else {
+      insdis_window_stack
+    }
+    insdis_crop <- resample(insdis_crop, topo_crop, method = "near")
+  } else {
+    insdis_crop <- topo_crop[[1]]; values(insdis_crop) <- NA_real_
+    warning("No insect/disease layers in [", burn_year - 5, ", ", burn_year - 1,
+            "] for burn: ", burn)
+  }
+  names(insdis_crop) <- "insect_disease_5yr"
+
   # -- 4b. Build pixel-level data frame ----------------------------------------
 
-  topo_df <- as.data.frame(topo_crop, xy = TRUE, na.rm = FALSE)
-  ndvi_df <- as.data.frame(ndvi_crop, xy = FALSE, na.rm = FALSE)
-  cc_df   <- as.data.frame(cc_crop,   xy = FALSE, na.rm = FALSE)
+  topo_df    <- as.data.frame(topo_crop,    xy = TRUE,  na.rm = FALSE)
+  ndvi_df    <- as.data.frame(ndvi_crop,    xy = FALSE, na.rm = FALSE)
+  cc_df      <- as.data.frame(cc_crop,      xy = FALSE, na.rm = FALSE)
+  ecozone_df <- as.data.frame(ecozone_crop, xy = FALSE, na.rm = FALSE)
+  insdis_df  <- as.data.frame(insdis_crop,  xy = FALSE, na.rm = FALSE)
 
-  pix_df     <- bind_cols(topo_df, ndvi_df, cc_df)
+  pix_df     <- bind_cols(topo_df, ndvi_df, cc_df, ecozone_df, insdis_df)
   valid_mask <- !is.na(pix_df$chili)
   n_total    <- nrow(pix_df)
   n_valid    <- sum(valid_mask)
@@ -141,6 +226,15 @@ for (burn in confirmed_burns) {
   # Add unit-level constants (same value for every pixel in this burn)
   pix_valid <- pix_df[valid_mask, ] %>%
     bind_cols(unit_const[rep(1, n_valid), unit_preds])
+
+  # rf1 was trained with ecozone and ndvi_winter_prior_year as factors;
+  # recode pixel-level codes to the same training-time levels so
+  # randomForest maps them consistently. Any code not seen in training
+  # becomes NA (and so, an NA prediction for that pixel).
+  pix_valid$ecozone <- recode_to_training_levels(
+    pix_valid$ecozone, ecozone_levels, "ecozone", burn)
+  pix_valid$ndvi_winter_prior_year <- recode_to_training_levels(
+    pix_valid$ndvi_winter_prior_year, ndvi_levels, "ndvi_winter_prior_year", burn)
 
   # -- 4c. Predict -------------------------------------------------------------
 
@@ -177,7 +271,7 @@ for (burn in confirmed_burns) {
   # -- 4e. Save raster ---------------------------------------------------------
 
   out_path <- file.path(
-    "output/prelim_model/unit_predictions",
+    "output/prelim_v2/unit_predictions",
     paste0(gsub("[^A-Za-z0-9_-]", "_", burn), "_pred.tif")
   )
   writeRaster(out_ras, out_path, overwrite = TRUE)
@@ -185,7 +279,7 @@ for (burn in confirmed_burns) {
 
   # -- 4f. Unit-level summary --------------------------------------------------
 
-  dominant <- names(which.max(colMeans(pred_probs)))
+  dominant <- names(which.max(colMeans(pred_probs, na.rm=T)))
 
   unit_summary[[burn]] <- tibble(
     burn_name            = burn,
@@ -205,7 +299,7 @@ for (burn in confirmed_burns) {
 unit_summary_df <- bind_rows(unit_summary)
 
 write.csv(unit_summary_df,
-          "output/prelim_model/unit_predictions/unit_summary.csv",
+          "output/prelim_v2/unit_predictions/unit_summary.csv",
           row.names = FALSE)
 
 print(unit_summary_df %>%
@@ -249,7 +343,7 @@ mosaic_list <- lapply(layer_specs, function(spec) {
   layer_rasters <- sprc(lapply(pred_list, \(r) r[[spec$idx]]))
   mos <- mosaic(layer_rasters, fun = spec$fun)
   names(mos) <- spec$name
-  out_path <- file.path("output/prelim_model/unit_predictions",
+  out_path <- file.path("output/prelim_v2/unit_predictions/mosaics/",
                         paste0("mosaic_", spec$name, ".tif"))
   writeRaster(mos, out_path, overwrite = TRUE)
   message("Saved mosaic: ", spec$name)
